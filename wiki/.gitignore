@@ -1,0 +1,45 @@
+# Oscam Wiki .gitignore
+
+# Archive folder - Source files from old wiki
+oscam_wiki_archive/
+
+# HTML files - Only Markdown files should be in the wiki repository
+# HTML documentation files in Wiki Documentation are reference materials
+# and should not be tracked
+*.html
+
+# Wiki Documentation folder - Reference materials only
+Wiki Documentation/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# OS generated files
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Git related
+*.orig
+*.rej
+
+# Build and generated files
+_build/
+_site/
+.jekyll-cache/
+.sass-cache/
+
+# Backup files
+*.md.backup
+*.md.bak
