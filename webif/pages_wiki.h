@@ -7,13 +7,11 @@
 
 #ifdef WEBIF_WIKI
 
-#define COMPRESSED_WIKI 1
-
 struct wiki_entry {
-	uint32_t param_ofs;
-	uint32_t config_ofs;
-	uint32_t section_ofs;
-	uint32_t text_ofs;
+	const char *param;
+	const char *config;
+	const char *section;
+	const char *text;
 	int8_t status;
 };
 
@@ -21,8 +19,6 @@ int32_t wiki_count(void);
 const struct wiki_entry *wiki_get_entries(void);
 const char *wiki_get_help(const char *config, const char *section, const char *param);
 int8_t wiki_get_status(const char *config, const char *section, const char *param);
-void wiki_get_data(const char **data, size_t *data_len, size_t *data_olen);
-char *wiki_get_decompressed_data(void);
 void webif_wiki_prepare(void);
 void webif_wiki_free(void);
 

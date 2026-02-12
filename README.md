@@ -1,110 +1,188 @@
-OSCam-Emu: Open Source CAM with Emulator
-========================================
-[![build](https://github.com/oscam-mirror/oscam-emu/actions/workflows/build-oscam.yml/badge.svg)](https://github.com/oscam-mirror/oscam-emu/actions/workflows/build-oscam.yml) [![sync](https://github.com/oscam-mirror/oscam-emu/actions/workflows/sync-gitlab.yml/badge.svg)](https://github.com/oscam-mirror/oscam-emu/actions/workflows/sync-gitlab.yml) [![patch](https://github.com/oscam-mirror/oscam-emu/actions/workflows/create-patch.yml/badge.svg)](https://github.com/oscam-mirror/oscam-emu/actions/workflows/create-patch.yml)
+# OSCam with AI Fake DCW Detector
 
-Wiki
-====
-https://git.streamboard.tv/common/oscam/-/wikis/home
+![AI Fake DCW Detector](images/image1.jpg)
 
-License
-=======
+## Overview
 
-OSCam-Emu: Open Source CAM with Emulator
-Copyright (C) 2009-2026 OSCam-Emu developers
+This repository contains a modified version of **OSCam** enhanced with an advanced **AI-inspired Fake DCW Detection and Voting System**.
 
-OSCam-Emu is based on the Streamboard mp-cardserver 0.9d by dukat and
-has been extended and worked on by many more since then.
+The goal of this system is to improve stability and reliability when multiple Control Word (CW) sources are available, such as:
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+- Local readers  
+- CacheEx peers  
+- CSP sources  
+- Virtual readers  
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+Instead of accepting the first CW received, this implementation collects multiple candidates and selects the most reliable one using weighted voting logic.
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+---
 
-For the full text of the licese, please read COPYING file in OSCam-Emu
-top directory or visit http://www.gnu.org/licenses/gpl-3.0.html
+# 🔍 Problem It Solves
 
+In multi-reader or CacheEx environments, fake or unstable DCWs can appear.
 
-Version history
-===============
+Default behavior:
+- First CW wins
+- Possible glitches, freezing, or unstable decoding
 
-OSCam-Emu history is accessible through GitHub history at:
-   https://github.com/oscam-mirror/oscam-emu/commits/master/
+With AI Fake DCW Detector:
+- Multiple CWs are collected
+- Sources are tracked
+- Votes are counted
+- Local readers can be weighted higher
+- Majority or timeout logic is applied
+- A reliable CW is selected
 
+Result:
 
-Repositories
-============
+✔ Reduced fake DCWs  
+✔ Increased decoding stability  
+✔ Better CacheEx reliability  
+✔ Smarter CW selection  
 
-GIT repository:
-   git clone https://github.com/oscam-mirror/oscam-emu.git
+---
 
+# 🧠 Core Functions
 
-Building OSCam-Emu from source
-==========================
+## 1️⃣ `cw_vote_add()`
 
-https://git.streamboard.tv/common/oscam/-/wikis/BuildingOscam
+This function is called whenever a new CW is received.
 
-For more information and examples on using the build system, please
-see README.build and README.config files.
+It:
 
+- Compares the CW with existing candidates
+- Increases vote count if it matches
+- Adds a new candidate if it is unique
+- Tracks:
+  - Total votes
+  - Local votes
+  - Reader source
+  - CW value
+- Identifies whether the source is:
+  - Local reader
+  - Virtual reader
+  - CacheEx client
+  - CSP source
 
-Building OSCam-Emu for different CPUs (cross-compilation)
-=====================================================
+Each CW candidate is stored in a voting pool.
 
-First you need to install the target CPU toolchain. Already built toolchains
-for various architectures can be downloaded from:
+---
 
-    https://git.streamboard.tv/common/oscam/-/wikis/CrossCompiling
+## 2️⃣ `cw_vote_decide()`
 
-In order to cross compile OSCam-Emu you need to set CROSS variable when
-running make. For example to compile for SH4 architecture you need
-to run: `make CROSS=sh4-linux-` or if your cross compilers are not
-in your PATH - `make CROSS=/opt/STM/STLinux-2.3/devkit/sh4/bin/sh4-linux-`.
+This function determines the final CW to use.
 
+### Decision Process
 
-Dependencies
-============
+1. Count total votes
+2. Verify minimum vote requirement
+3. Calculate effective score:
+4. Check for majority (> 50%)
+5. Apply timeout logic
+6. Apply fallback strategy if necessary
 
-OSCam-Emu by default do not depend on external libraries except when compilation
-with SSL is requested. In that case openssl (libcrypto) library must be
-installed.
+If a winner is found:
 
-OSCam-Emu supports building with the following external dependencies:
-  - libcrypto (libssl) - 'make USE_LIBCRYPTO=1'
-  - libusb             - 'make USE_LIBUSB=1'
-  - PCSC               - 'make USE_PCSC=1'
-  - SH4 STAPI support  - 'make USE_STAPI=1'
-  - SH4 STAPI5 support - 'make USE_STAPI5=1'
-  - Coolapi support    - 'make USE_COOLAPI=1'
-  - AZBOX support      - 'make USE_AZBOX=1'
+- CW is copied into `er->cw`
+- CacheEx hit statistics are updated
+- Optional logging is performed
 
-For STAPI support you need to download liboscam_stapi.a library and place
-it in stapi directory under oscam/ root dir.
+If no clear winner exists, the system waits for more votes unless timeout rules apply.
 
-For STAPI5 support you need to download liboscam_stapi5.a library and place
-it in stapi directory under oscam/ root dir.
+---
 
-For more information and examples on using the build system, run `make help`.
+# ⚙ Configuration Options
 
+| Parameter | Description |
+|------------|------------|
+| `cwvote_enabled` | Enable/disable voting system |
+| `cwvote_max_candidates` | Maximum CW candidates stored |
+| `cwvote_compare_len` | Number of bytes used for CW comparison |
+| `cwvote_local_weight` | Weight multiplier for local votes |
+| `cwvote_min_votes` | Minimum required votes before decision |
+| `cwvote_timeout` | Timeout in milliseconds |
+| `cwvote_fallback` | Fallback mode (1 = best candidate, 2 = first candidate) |
+| `cwvote_log_enabled` | Enable detailed debug logging |
 
-Help and Support
-================
+---
 
-man pages and configuration examples are in Distribution/doc directory.
+# 🏆 Winner Selection Logic
 
-You may visit our GitHub system for tracking and filling bug reports.
-   https://github.com/oscam-mirror/oscam-emu/issues/new
+A CW is selected if:
 
-If you experience any problems with OSCam, feel free to post in our support
-forum under (mainly German and English language) at:
-   https://github.com/oscam-mirror/oscam-emu/discussions
+- It has a strict majority (> 50%)  
+OR  
+- Timeout is reached and fallback mode allows selection  
 
-Configuration wiki:
-   https://wiki.streamboard.tv/wiki/OSCam/de/Config/oscam.conf
+If timeout occurs and:
+
+- `fallback = 1` → best scoring candidate is selected  
+- `fallback = 2` → first candidate (slot 0) is selected  
+
+---
+
+# 📊 Intelligent Source Awareness
+
+The system distinguishes between:
+
+- Trusted local readers
+- Virtual readers
+- CacheEx clients
+- CSP sources
+
+Local readers can be weighted higher using `cwvote_local_weight`, improving reliability in hybrid environments.
+
+---
+
+# 📈 CacheEx Integration
+
+If the winning CW originates from CacheEx:
+
+- `cwcacheexhit` counters are incremented
+- Client and account statistics are updated
+- Global hit statistics are updated
+
+This improves monitoring accuracy and performance analysis.
+
+---
+
+# 🚀 Advantages
+
+- Detects and filters fake DCWs  
+- Improves stability in multi-reader setups  
+- Reduces glitching and freezing  
+- Configurable and flexible logic  
+- Seamlessly integrated into OSCam core  
+
+---
+
+# 🧩 AI Concept
+
+Although not based on machine learning, this system applies AI-style decision logic:
+
+- Aggregates multiple inputs
+- Applies weighted scoring
+- Uses majority validation
+- Implements adaptive timeout fallback
+
+It behaves like deterministic intelligence for CW selection.
+
+---
+
+# Intended Use
+
+Designed for:
+
+- Emulated environments
+- CacheEx-heavy setups
+- Multi-reader configurations
+- Advanced OSCam tuning
+- High-stability streaming environments
+
+---
+
+# License
+
+Based on the OSCam open-source project.  
+This repository includes custom modifications implementing advanced CW voting and fake DCW detection logic.
+

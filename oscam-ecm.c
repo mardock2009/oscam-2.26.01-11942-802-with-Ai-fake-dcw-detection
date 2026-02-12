@@ -3995,8 +3995,9 @@ int cw_vote_add(struct ecm_request_t *er, uint8_t *cw, struct s_reader *rdr)
             free_idx = i;
 
         // Sprawdź czy wpis jest poprawnie zainicjalizowany (votes > 0) i w granicach tablicy
+        // Porównujemy cały CW (16 bajtów), nie tylko compare_len
         if (i < MAX_VOTE_CANDIDATES && er->vote_pool[i].votes > 0 &&
-            memcmp(er->vote_pool[i].cw, cw, compare_len) == 0) {
+            memcmp(er->vote_pool[i].cw, cw, 16) == 0) {
 
             // Ogranicz głosy do wartości z konfiguracji
             if (er->vote_pool[i].votes < cfg.cwvote_max_candidates) {
@@ -4073,9 +4074,35 @@ int cw_vote_decide(struct ecm_request_t *er)
         }
     }
 
-    if (cfg.cwvote_log_enabled) {
+    // Logowanie podsumowania - tylko gdy są jakieś głosy
+    if (cfg.cwvote_log_enabled && total_votes > 0) {
         cs_log("[Ai_vote_decide] Total votes: %d | Min required: %d | Timeout: %d ms", 
                total_votes, min_votes, timeout);
+    }
+
+    // Sprawdź czy jest tylko jeden kandydat (jeden unikalny CW)
+    // Jeśli tak, przyjmij go awaryjnie - nie ma innych kluczy do porównania
+    if (total_votes == 1 && best >= 0) {
+        memcpy(er->cw, er->vote_pool[best].cw, 16);
+        
+        // Update cacheex hit stats if the winning CW came from cacheex
+        if (cfg.cwvote_enabled && er->cacheex_src) {
+            struct s_client *src_cl = er->cacheex_src;
+            if (src_cl && src_cl->cwcacheexhit >= 0) {
+                src_cl->cwcacheexhit++;
+                if (src_cl->account) {
+                    src_cl->account->cwcacheexhit++;
+                }
+                first_client->cwcacheexhit++;
+            }
+        }
+
+        if (cfg.cwvote_log_enabled) {
+            cs_hexdump(0, er->cw, 16, cw_hex, sizeof(cw_hex));
+            cs_log("[Ai_vote_decide] SINGLE CANDIDATE → Accepting CW: %s | Votes: %d (local: %d)",
+                   cw_hex, er->vote_pool[best].votes, er->vote_pool[best].local_votes);
+        }
+        return 1;
     }
 
     // Za mało głosów
