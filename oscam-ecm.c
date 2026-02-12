@@ -2930,32 +2930,47 @@ void write_ecm_answer_fromcache(struct s_write_from_cache *wfc)
 	if(ecm->from_csp) { er->csp_answered = 1; } // update er as answered by csp (csp have no group)
 #endif
 
-	if(er->rc >= E_NOTFOUND)
+	if(er->rc >= E_NOTFOUND || er->rc == E_UNHANDLED)
 	{
 		// CW Vote: If enabled and CAID matches, add to vote pool instead of sending DCW directly
-		if (cfg.cwvote_enabled && is_cwvote_caid(er))
+		if (cfg.cwvote_enabled && is_cwvote_caid(er) && ecm->cw && !chk_is_null_CW(ecm->cw) && !caid_is_biss(er->caid))
 		{
+			// Use cacheex_src or from_csp directly if selected_reader is NULL
+			// This fixes the issue where virtual readers are NULL
 			struct s_reader *source_rdr = NULL;
 			if (ecm->selected_reader) {
 				source_rdr = ecm->selected_reader;
-			} else if (ecm->cacheex_src) {
-				source_rdr = virtual_cacheex_reader;
-			} else if (ecm->from_csp) {
-				source_rdr = virtual_csp_reader;
 			}
 
-			if (source_rdr) {
+			// Pass the actual cacheex source or csp info for voting
+			// Use ecm->cacheex_src or ecm->from_csp when virtual readers are not available
+			if (source_rdr || ecm->cacheex_src || ecm->from_csp) {
 				if (cfg.cwvote_log_enabled) {
+					const char *source_label = "unknown";
+					if (source_rdr) {
+						source_label = source_rdr->label;
+					} else if (ecm->cacheex_src && check_client(ecm->cacheex_src) && ecm->cacheex_src->account) {
+						source_label = ecm->cacheex_src->account->usr;
+					} else if (ecm->from_csp) {
+						source_label = "CSP";
+					}
 					cs_log_dbg(D_LB, "{client %s, caid %04X, prid %06X, srvid %04X} [write_ecm_answer_fromcache] CW Vote enabled, adding CW from cache (source: %s) to vote pool.",
-							(check_client(er->client) ? er->client->account->usr : "-"), er->caid, er->prid, er->srvid, source_rdr->label);
+							(check_client(er->client) ? er->client->account->usr : "-"), er->caid, er->prid, er->srvid, source_label);
+				}
+				// Always copy cacheex_src and from_csp so cw_vote_decide can use it
+				if (ecm->cacheex_src) {
+					er->cacheex_src = ecm->cacheex_src;
+				}
+				if (ecm->from_csp) {
+					er->from_csp = ecm->from_csp;
 				}
 				cw_vote_add(er, ecm->cw, source_rdr);
 				// Keep er->rc as E_UNHANDLED to allow voting to proceed
 				// Do NOT call send_dcw here. It will be called by cw_vote_decide or ecm_timeout.
 			} else {
-				// Fallback if source_rdr could not be determined for voting
+				// Fallback if no source could be determined for voting
 				if (cfg.cwvote_log_enabled) {
-					cs_log_dbg(D_LB, "{client %s, caid %04X, prid %06X, srvid %04X} [write_ecm_answer_fromcache] CW Vote enabled, but source for cache entry could not be determined for voting. Sending DCW directly.",
+					cs_log_dbg(D_LB, "{client %s, caid %04X, prid %06X, srvid %04X} [write_ecm_answer_fromcache] CW Vote enabled, but source for cache entry could not be determined. Sending DCW directly.",
 							(check_client(er->client) ? er->client->account->usr : "-"), er->caid, er->prid, er->srvid);
 				}
 				send_dcw(er->client, er);
@@ -4097,6 +4112,18 @@ int cw_vote_decide(struct ecm_request_t *er)
     if (has_majority || (timeout_reached && fallback == 1)) {
         memcpy(er->cw, er->vote_pool[best].cw, 16);
 
+        // Update cacheex hit stats if the winning CW came from cacheex
+        if (cfg.cwvote_enabled && er->cacheex_src) {
+            struct s_client *src_cl = er->cacheex_src;
+            if (src_cl && src_cl->cwcacheexhit >= 0) {
+                src_cl->cwcacheexhit++;
+                if (src_cl->account) {
+                    src_cl->account->cwcacheexhit++;
+                }
+                first_client->cwcacheexhit++;
+            }
+        }
+
         if (cfg.cwvote_log_enabled) {
             cs_hexdump(0, er->cw, 16, cw_hex, sizeof(cw_hex));
             cs_log("[Ai_vote_decide] WINNER → CW: %s | Votes: %d (local: %d) | Effective: %d",
@@ -4109,6 +4136,19 @@ int cw_vote_decide(struct ecm_request_t *er)
         // fallback = weź pierwszy CW (slot 0)
         if (er->vote_pool[0].votes > 0) {
             memcpy(er->cw, er->vote_pool[0].cw, 16);
+            
+            // Update cacheex hit stats if the winning CW came from cacheex
+            if (cfg.cwvote_enabled && er->cacheex_src) {
+                struct s_client *src_cl = er->cacheex_src;
+                if (src_cl && src_cl->cwcacheexhit >= 0) {
+                    src_cl->cwcacheexhit++;
+                    if (src_cl->account) {
+                        src_cl->account->cwcacheexhit++;
+                    }
+                    first_client->cwcacheexhit++;
+                }
+            }
+
             if (cfg.cwvote_log_enabled) cs_log("[Ai_vote_decide] Fallback: taking first CW");
             return 1;
         }
