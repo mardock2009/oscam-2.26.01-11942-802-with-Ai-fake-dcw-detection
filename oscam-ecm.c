@@ -2668,6 +2668,85 @@ int32_t write_ecm_answer(struct s_reader *reader, ECM_REQUEST *er, int8_t rc, ui
 	}
 #endif
 
+	// Update reader stats BEFORE vote logic (with original rc), because after vote ea->rc is set to E_UNHANDLED
+	if(!dontwriteStats && rc < E_NOTFOUND)
+	{
+		ea->ecm_time = comp_timeb(&now, &ea->time_request_sent);
+		if(ea->ecm_time < 1) { ea->ecm_time = 1; }
+		send_reader_stat(reader, er, ea, rc, ea->ecm_time);
+	}
+	else
+	{
+		ea->ecm_time = comp_timeb(&now, &ea->time_request_sent);
+		if(ea->ecm_time < 1) { ea->ecm_time = 1; }
+	}
+
+	// Update reader ECM counters BEFORE vote logic (with original rc)
+	// These counters (ecmsok, ecmsnok, etc.) are used for webif statistics
+	if(!ea->is_pending && rc < E_NOTFOUND)
+	{
+		reader->ecmsok++;
+		reader->webif_ecmsok++;
+#ifdef CS_CACHEEX_AIO
+		if(er->localgenerated)
+			reader->ecmsoklg++;
+#endif
+#ifdef CS_CACHEEX
+		struct s_client *eacl = reader->client;
+		if(cacheex_reader(reader) && check_client(eacl))
+		{
+			eacl->cwcacheexgot++;
+			cacheex_add_stats(eacl, ea->er->caid, ea->er->srvid, ea->er->prid, 1
+#ifdef CS_CACHEEX_AIO
+					, er->localgenerated);
+#else
+					);
+#endif
+			first_client->cwcacheexgot++;
+#ifdef CS_CACHEEX_AIO
+			if(er->localgenerated)
+			{
+				eacl->cwcacheexgotlg++;
+				first_client->cwcacheexgotlg++;
+			}
+#endif
+		}
+#endif
+	}
+
+	// Update reader ECM counters for E_NOTFOUND BEFORE vote logic
+	if(!ea->is_pending && rc == E_NOTFOUND)
+	{
+		reader->ecmsnok++;
+		reader->webif_ecmsnok++;
+		if(reader->ecmnotfoundlimit && reader->ecmsnok >= reader->ecmnotfoundlimit)
+		{
+			rdr_log(reader, "ECM not found limit reached %u. Restarting the reader.",
+					reader->ecmsnok);
+			reader->ecmsnok = 0; // Reset the variable
+			reader->ecmshealthnok = 0; // Reset the variable
+			add_job(reader->client, ACTION_READER_RESTART, NULL, 0);
+		}
+	}
+
+	// Update reader ECM counters for E_TIMEOUT BEFORE vote logic
+	if(!ea->is_pending && rc == E_TIMEOUT)
+	{
+#ifdef WITH_LB
+		STAT_QUERY q;
+		readerinfofix_get_stat_query(er, &q);
+		READER_STAT *s;
+		s = readerinfofix_get_add_stat(reader, &q);
+		if (s)
+		{
+			cs_log_dbg(D_LB, "inc fail {client %s, caid %04X, prid %06X, srvid %04X} [write_ecm_answer] reader %s rc %d, ecm time %d ms", (check_client(er->client) ? er->client->account->usr : "-"), er->caid, er->prid, er->srvid, reader ? reader->label : "-", rc, ea->ecm_time);
+			readerinfofix_inc_fail(s); // now increase fail factor for unhandled timeouts
+		}
+#endif
+		reader->ecmstout++; // now append timeouts to the readerinfo timeout count
+		reader->webif_ecmstout++;
+	}
+
 	// If a valid CW is found, and CW Vote is enabled for this CAID, add it to the vote pool and mark this answer as unhandled for now
 	if(cfg.cwvote_enabled && is_cwvote_caid(er) && rc < E_NOTFOUND && cw && !chk_is_null_CW(cw) && !caid_is_biss(er->caid))
 	{
@@ -2684,8 +2763,6 @@ int32_t write_ecm_answer(struct s_reader *reader, ECM_REQUEST *er, int8_t rc, ui
 		ea->rc = rc; // For non-CW answers or invalid CWs, set the actual RC
 	}
 
-	ea->ecm_time = comp_timeb(&now, &ea->time_request_sent);
-	if(ea->ecm_time < 1) { ea->ecm_time = 1; } // set ecm_time 1 if answer immediately
 	ea->rcEx = rcEx;
 	if(cw) { memcpy(ea->cw, cw, 16); } // Store the CW in ea->cw for voting
 	if(msglog) { memcpy(ea->msglog, msglog, MSGLOGSIZE); }
@@ -2738,12 +2815,6 @@ int32_t write_ecm_answer(struct s_reader *reader, ECM_REQUEST *er, int8_t rc, ui
 #endif
 		}
 
-		if(!dontwriteStats)
-		{
-			// readers stats for LB
-			send_reader_stat(reader, er, ea, ea->rc);
-		}
-
 		// reader checks
 #ifdef WITH_DEBUG
 	if(cs_dblevel & D_TRACE)
@@ -2754,74 +2825,9 @@ int32_t write_ecm_answer(struct s_reader *reader, ECM_REQUEST *er, int8_t rc, ui
 	}
 #endif
 		// Update reader stats:
-		if(ea->rc == E_FOUND)
-		{
-			if(cfg.cwlogdir != NULL)
-				{ logCWtoFile(er, ea->cw); } // CWL logging only if cwlogdir is set in config
+		// Old reader ECM counter updates removed - now handled before vote logic
 
-			reader->ecmsok++;
-#ifdef CS_CACHEEX_AIO
-			if(er->localgenerated)
-				reader->ecmsoklg++;
-#endif
-			reader->webif_ecmsok++;
-#ifdef CS_CACHEEX
-			struct s_client *eacl = reader->client;
-			if(cacheex_reader(reader) && check_client(eacl))
-			{
-				eacl->cwcacheexgot++;
-				cacheex_add_stats(eacl, ea->er->caid, ea->er->srvid, ea->er->prid, 1
-#ifdef CS_CACHEEX_AIO
-						, er->localgenerated);
-#else
-						);
-#endif
-				first_client->cwcacheexgot++;
-#ifdef CS_CACHEEX_AIO
-				if(er->localgenerated)
-				{
-					eacl->cwcacheexgotlg++;
-					first_client->cwcacheexgotlg++;
-				}
-#endif
-			}
-#endif
-		}
-		else if(ea->rc == E_NOTFOUND)
-		{
-			reader->ecmsnok++;
-			reader->webif_ecmsnok++;
-			if(reader->ecmnotfoundlimit && reader->ecmsnok >= reader->ecmnotfoundlimit)
-			{
-				rdr_log(reader, "ECM not found limit reached %u. Restarting the reader.",
-						reader->ecmsnok);
-				reader->ecmsnok = 0; // Reset the variable
-				reader->ecmshealthnok = 0; // Reset the variable
-				add_job(reader->client, ACTION_READER_RESTART, NULL, 0);
-			}
-		}
-
-		// this fixes big oscam mistake
-		// wrong reader status on web info aka not counted timeouts which dispalyed
-		// reader info 100 percent OK but reader had a ton of unhandled timeouts!
-		else if(ea->rc == E_TIMEOUT)
-		{
-#ifdef WITH_LB
-			STAT_QUERY q;
-			readerinfofix_get_stat_query(er, &q);
-			READER_STAT *s;
-			s = readerinfofix_get_add_stat(reader, &q);
-			if (s)
-			{
-				cs_log_dbg(D_LB, "inc fail {client %s, caid %04X, prid %06X, srvid %04X} [write_ecm_answer] reader %s rc %d, ecm time %d ms (%d ms)", (check_client(er->client) ? er->client->account->usr : "-"), er->caid, er->prid, er->srvid, reader ? reader->label : "-", rc, ea->ecm_time, ntime);
-				readerinfofix_inc_fail(s); // now increase fail factor for unhandled timeouts
-			}
-#endif
-			reader->ecmstout++; // now append timeouts to the readerinfo timeout count
-			reader->webif_ecmstout++;
-		}
-
-		// Reader ECMs Health Try (by Pickser)
+		// reader checks
 		if(reader->ecmsok != 0 || reader->ecmsnok != 0 || reader->ecmstout != 0)
 		{
 			reader->ecmshealthok = ((double) reader->ecmsok / (reader->ecmsok + reader->ecmsnok + reader->ecmstout)) * 100;

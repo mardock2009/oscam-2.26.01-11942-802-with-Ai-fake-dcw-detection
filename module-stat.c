@@ -2094,14 +2094,13 @@ void lb_update_last(struct s_ecm_answer *ea_er, struct s_reader *reader)
 		cs_ftime(&reader->lb_last);
 }
 
-void send_reader_stat(struct s_reader *rdr, ECM_REQUEST *er, struct s_ecm_answer *ea, int8_t rc)
+void send_reader_stat(struct s_reader *rdr, ECM_REQUEST *er, struct s_ecm_answer *ea, int8_t rc, int32_t ecm_time)
 {
 	if(rc >= E_99 || cacheex_reader(rdr))
 		{ return; }
 
-	int32_t ecm_time = cfg.ctimeout;
-	if(ea->ecm_time && ea->rc <= E_NOTFOUND)
-		{ ecm_time = ea->ecm_time; }
+	if(!ecm_time)
+		ecm_time = cfg.ctimeout;
 
 	add_stat(rdr, er, ecm_time, rc, ea->rcEx);
 }
