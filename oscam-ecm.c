@@ -3945,37 +3945,16 @@ int cw_vote_add(struct ecm_request_t *er, uint8_t *cw, struct s_reader *rdr)
         if (i < MAX_VOTE_CANDIDATES && er->vote_pool[i].votes > 0) {
             int cmp = memcmp(er->vote_pool[i].cw, cw, 16);
             
-            // Sprawdź czy ten reader już głosował dla tego CW (zapobiegaj wielokrotnym głosom)
-            bool already_voted = false;
-            if (rdr != NULL) {
-                for (int v = 0; v < er->vote_pool[i].votes && v < MAX_VOTE_CANDIDATES; v++) {
-                    if (er->vote_pool[i].voters[v] == rdr) {
-                        already_voted = true;
-                        break;
-                    }
-                }
-            }
-
-            if (cfg.cwvote_log_enabled && cmp == 0) {
-                char pool_hex[33];
-            // cs_log("[Ai_vote_add] Comparing: pool=%s vs cw=%s | cmp=%d | pool.votes=%d | already_voted=%d",
-            //        pool_hex, cw_hex, cmp, er->vote_pool[i].votes, already_voted);
-            }
-            
             if (cmp == 0) {
-                if (!already_voted) {
-                    // Dodaj głos do istniejącego CW
-                    if (er->vote_pool[i].votes < MAX_VOTE_CANDIDATES) {
-                        er->vote_pool[i].voters[er->vote_pool[i].votes] = rdr;
-                        er->vote_pool[i].votes++;
-                        if (is_local) er->vote_pool[i].local_votes++;
-                    }
-                    // cs_log("[Ai_vote_add] Existing CW → Votes: %d (local: %d) from %s",
-                    //        er->vote_pool[i].votes, er->vote_pool[i].local_votes, source_label);
-                } else {
-                    // Reader już głosował dla tego CW - ignoruj
-                    // cs_log("[Ai_vote_add] Reader %s already voted for this CW - ignoring", source_label);
+                // CW już istnieje w puli - agreguj głosy niezależnie od źródła
+                // To pozwala na agregację głosów z różnych cacheex peerów dla tego samego CW
+                if (er->vote_pool[i].votes < MAX_VOTE_CANDIDATES) {
+                    er->vote_pool[i].voters[er->vote_pool[i].votes] = rdr;
+                    er->vote_pool[i].votes++;
+                    if (is_local) er->vote_pool[i].local_votes++;
                 }
+                // cs_log("[Ai_vote_add] Aggregated vote for existing CW → Votes: %d (local: %d) from %s",
+                //        er->vote_pool[i].votes, er->vote_pool[i].local_votes, source_label);
                 return 0;
             }
         }

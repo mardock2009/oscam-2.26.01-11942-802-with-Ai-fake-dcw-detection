@@ -15,10 +15,11 @@ git add -A
 git commit -m "$msg"
 
 if [ $? -ne 0 ]; then
-  echo "❌ Commit nie powiódł się."
+  echo "❌ Brak zmian do commitowania."
   exit 1
 fi
 
-git push --force origin main
+git push origin main
 
-echo "✅ Gotowe. Repo zaktualizowane."
+echo "✅ Commit zapisany i wypchnięty bez nadpisywania historii."
+
