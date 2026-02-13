@@ -1152,6 +1152,7 @@ typedef struct ecm_request_t
 #ifdef HAVE_DVBAPI
 	uint8_t			adapter_index;
 #endif
+	uint32_t		vote_pool_session;					// sesja dla vote_pool - zapobiega wielokrotnemu czyszczeniu
 	struct s_cw_vote vote_pool[MAX_VOTE_CANDIDATES];
 } ECM_REQUEST;
 

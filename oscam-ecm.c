@@ -2368,76 +2368,7 @@ void update_chid(ECM_REQUEST *er)
 	er->chid = get_subid(er);
 }
 
-/*
- * This function writes the current CW from ECM struct to a cwl file.
- * The filename is re-calculated and file re-opened every time.
- * This will consume a bit cpu time, but nothing has to be stored between
- * each call. If not file exists, a header is prepended
- */
-static void logCWtoFile(ECM_REQUEST *er, uint8_t *cw)
-{
-	FILE *pfCWL;
-	char srvname[CS_SERVICENAME_SIZE];
-	/* %s / %s   _I  %04X  _  %s  .cwl  */
-	char buf[256 + sizeof(srvname)];
-	char date[9];
-	uint8_t i, parity, writeheader = 0;
-	struct tm timeinfo;
 
-	/*
-	* search service name for that id and change characters
-	* causing problems in file name
-	*/
-
-	get_servicename(cur_client(), er->srvid, er->prid, er->caid, srvname, sizeof(srvname));
-
-	for(i = 0; srvname[i]; i++)
-		if(srvname[i] == ' ') { srvname[i] = '_'; }
-
-	/* calc log file name */
-	time_t walltime = cs_time();
-	localtime_r(&walltime, &timeinfo);
-	strftime(date, sizeof(date), "%Y%m%d", &timeinfo);
-	snprintf(buf, sizeof(buf), "%s/%s_I%04X_%s.cwl", cfg.cwlogdir, date, er->srvid, srvname);
-
-	/* open failed, assuming file does not exist, yet */
-	if((pfCWL = fopen(buf, "r")) == NULL)
-	{
-		writeheader = 1;
-	}
-	else
-	{
-		/* we need to close the file if it was opened correctly */
-		fclose(pfCWL);
-	}
-
-	if((pfCWL = fopen(buf, "a+")) == NULL)
-	{
-		/* maybe this fails because the subdir does not exist. Is there a common function to create it?
-				for the moment do not print32_t to log on every ecm
-				cs_log(""error opening cw logfile for writing: %s (errno=%d %s)", buf, errno, strerror(errno)); */
-		return;
-	}
-	if(writeheader)
-	{
-		/* no global macro for cardserver name :( */
-		fprintf(pfCWL, "# OSCam cardserver v%s - %s\n", CS_VERSION, SCM_URL);
-		fprintf(pfCWL, "# control word log file for use with tsdec offline decrypter\n");
-		strftime(buf, sizeof(buf), "DATE %Y-%m-%d, TIME %H:%M:%S, TZ %Z\n", &timeinfo);
-		fprintf(pfCWL, "# %s", buf);
-		fprintf(pfCWL, "# CAID 0x%04X, SID 0x%04X, SERVICE \"%s\"\n", er->caid, er->srvid, srvname);
-	}
-
-	parity = er->ecm[0] & 1;
-	fprintf(pfCWL, "%d ", parity);
-	for(i = parity * 8; i < 8 + parity * 8; i++)
-		{ fprintf(pfCWL, "%02X ", cw[i]); }
-	/* better use incoming time er->tps rather than current time? */
-	strftime(buf, sizeof(buf), "%H:%M:%S\n", &timeinfo);
-	fprintf(pfCWL, "# %s", buf);
-	fflush(pfCWL);
-	fclose(pfCWL);
-}
 
 int32_t write_ecm_answer(struct s_reader *reader, ECM_REQUEST *er, int8_t rc, uint8_t rcEx, uint8_t *cw, char *msglog, uint16_t used_cardtier, EXTENDED_CW* cw_ex)
 {
@@ -2939,7 +2870,7 @@ void write_ecm_answer_fromcache(struct s_write_from_cache *wfc)
 	if(er->rc >= E_NOTFOUND || er->rc == E_UNHANDLED)
 	{
 		// CW Vote: If enabled and CAID matches, add to vote pool instead of sending DCW directly
-		if (cfg.cwvote_enabled && is_cwvote_caid(er) && ecm->cw && !chk_is_null_CW(ecm->cw) && !caid_is_biss(er->caid))
+		if (cfg.cwvote_enabled && is_cwvote_caid(er) && !chk_is_null_CW(ecm->cw) && !caid_is_biss(er->caid))
 		{
 			// Use cacheex_src or from_csp directly if selected_reader is NULL
 			// This fixes the issue where virtual readers are NULL
@@ -3986,6 +3917,16 @@ int cw_vote_add(struct ecm_request_t *er, uint8_t *cw, struct s_reader *rdr)
 
     cs_hexdump(0, cw, 16, cw_hex, sizeof(cw_hex));
 
+    // Sprawdź czy vote_pool jest pusta - jeśli nie, wyczyść ją
+    // To zapobiega duplikatom z poprzednich żądań ECM
+    // Używamy er->tps.time jako identyfikatora sesji ECM
+    // Jeśli sesja się zmieniła (nowe żądanie), czyścimy pulę
+    if (er->vote_pool_session != er->tps.time) {
+        memset(er->vote_pool, 0, sizeof(er->vote_pool));
+        er->vote_pool_session = er->tps.time;
+        // cs_log("[Ai_vote_add] Clearing vote_pool for new ECM request (time: %u)", (unsigned int)er->tps.time);
+    }
+
     // Logowanie wyłączone - odkomentuj jeśli potrzebne
     // if (cfg.cwvote_log_enabled) {
     //     cs_log("[Ai_vote_add] Adding CW from client %s, source %s (CAID: %04X, PRID: %06X, SRVID: %04X). CW: %s",
@@ -3994,37 +3935,54 @@ int cw_vote_add(struct ecm_request_t *er, uint8_t *cw, struct s_reader *rdr)
     // }
 
     int max_cand = cfg.cwvote_max_candidates;
-    int compare_len = cfg.cwvote_compare_len;
 
+    // Sprawdź czy wpis jest poprawnie zainicjalizowany (votes > 0) i w granicach tablicy
+    // Porównujemy cały CW (16 bajtów), nie tylko compare_len
     for (i = 0; i < max_cand; i++) {
         if (er->vote_pool[i].votes == 0 && free_idx < 0)
             free_idx = i;
 
-        // Sprawdź czy wpis jest poprawnie zainicjalizowany (votes > 0) i w granicach tablicy
-        // Porównujemy cały CW (16 bajtów), nie tylko compare_len
-        if (i < MAX_VOTE_CANDIDATES && er->vote_pool[i].votes > 0 &&
-            memcmp(er->vote_pool[i].cw, cw, 16) == 0) {
-
-            // Ogranicz głosy do wartości z konfiguracji
-            if (er->vote_pool[i].votes < cfg.cwvote_max_candidates) {
-                er->vote_pool[i].votes++;
-                if (is_local) er->vote_pool[i].local_votes++;
-                // Store the actual reader if available, otherwise NULL
-                er->vote_pool[i].voters[er->vote_pool[i].votes - 1] = rdr;
+        if (i < MAX_VOTE_CANDIDATES && er->vote_pool[i].votes > 0) {
+            int cmp = memcmp(er->vote_pool[i].cw, cw, 16);
+            
+            // Sprawdź czy ten reader już głosował dla tego CW (zapobiegaj wielokrotnym głosom)
+            bool already_voted = false;
+            if (rdr != NULL) {
+                for (int v = 0; v < er->vote_pool[i].votes && v < MAX_VOTE_CANDIDATES; v++) {
+                    if (er->vote_pool[i].voters[v] == rdr) {
+                        already_voted = true;
+                        break;
+                    }
+                }
             }
 
-            // Logowanie wyłączone - odkomentuj jeśli potrzebne
-            // if (cfg.cwvote_log_enabled) {
-            //     cs_log("[Ai_vote_add] Existing CW → Votes: %d (local: %d) from %s",
-            //            er->vote_pool[i].votes, er->vote_pool[i].local_votes, source_label);
-            // }
-            return 0;
+            if (cfg.cwvote_log_enabled && cmp == 0) {
+                char pool_hex[33];
+            // cs_log("[Ai_vote_add] Comparing: pool=%s vs cw=%s | cmp=%d | pool.votes=%d | already_voted=%d",
+            //        pool_hex, cw_hex, cmp, er->vote_pool[i].votes, already_voted);
+            }
+            
+            if (cmp == 0) {
+                if (!already_voted) {
+                    // Dodaj głos do istniejącego CW
+                    if (er->vote_pool[i].votes < MAX_VOTE_CANDIDATES) {
+                        er->vote_pool[i].voters[er->vote_pool[i].votes] = rdr;
+                        er->vote_pool[i].votes++;
+                        if (is_local) er->vote_pool[i].local_votes++;
+                    }
+                    // cs_log("[Ai_vote_add] Existing CW → Votes: %d (local: %d) from %s",
+                    //        er->vote_pool[i].votes, er->vote_pool[i].local_votes, source_label);
+                } else {
+                    // Reader już głosował dla tego CW - ignoruj
+                    // cs_log("[Ai_vote_add] Reader %s already voted for this CW - ignoring", source_label);
+                }
+                return 0;
+            }
         }
     }
 
     if (free_idx < 0) {
-        if (cfg.cwvote_log_enabled)
-            cs_log("[Ai_vote_add] Voting pool full!");
+        // cs_log("[Ai_vote_add] Voting pool full!");
         return -1;
     }
 
@@ -4086,9 +4044,23 @@ int cw_vote_decide(struct ecm_request_t *er)
                total_votes, min_votes, timeout);
     }
 
+    // Szukamy najlepszego (z effective score) - MUSI być przed sprawdzeniem pojedynczego kandydata
+    for (i = 0; i < max_cand; i++) {
+        if (er->vote_pool[i].votes == 0) continue;
+
+        int effective_score = er->vote_pool[i].votes + 
+                             (int)(er->vote_pool[i].local_votes * local_weight);
+
+        if (effective_score > best_score) {
+            best_score = effective_score;
+            best = i;
+        }
+    }
+
     // Sprawdź czy jest tylko jeden kandydat (jeden unikalny CW)
-    // Jeśli tak, przyjmij go awaryjnie - nie ma innych kluczy do porównania
-    if (total_votes == 1 && best >= 0) {
+    // Jeśli timeout == 0, przyjmij od razu - nie ma sensu czekać
+    // Jeśli timeout > 0, czekaj - może przyjdą inne klucze
+    if (total_votes == 1 && best >= 0 && timeout == 0) {
         memcpy(er->cw, er->vote_pool[best].cw, 16);
         
         // Update cacheex hit stats if the winning CW came from cacheex
@@ -4113,25 +4085,35 @@ int cw_vote_decide(struct ecm_request_t *er)
 
     // Za mało głosów
     if (total_votes < min_votes) {
+        // Jeśli timeout minął, zaakceptuj pojedynczy głos jako fallback
         if (timeout > 0 && comp_timeb(&now_tb, &er->tps) >= timeout) {
             if (cfg.cwvote_log_enabled)
-                cs_log("[Ai_vote_decide] Timeout reached with too few votes → applying fallback");
-            // tu możesz obsłużyć fallback jeśli chcesz
+                cs_log("[Ai_vote_decide] Timeout reached with too few votes (%d/%d) → accepting single candidate as fallback", total_votes, min_votes);
+            
+            if (best >= 0) {
+                memcpy(er->cw, er->vote_pool[best].cw, 16);
+                
+                // Update cacheex hit stats if the winning CW came from cacheex
+                if (cfg.cwvote_enabled && er->cacheex_src) {
+                    struct s_client *src_cl = er->cacheex_src;
+                    if (src_cl && src_cl->cwcacheexhit >= 0) {
+                        src_cl->cwcacheexhit++;
+                        if (src_cl->account) {
+                            src_cl->account->cwcacheexhit++;
+                        }
+                        first_client->cwcacheexhit++;
+                    }
+                }
+
+                if (cfg.cwvote_log_enabled) {
+                    cs_hexdump(0, er->cw, 16, cw_hex, sizeof(cw_hex));
+                    cs_log("[Ai_vote_decide] SINGLE CANDIDATE (fallback) → Accepting CW: %s | Votes: %d (local: %d)",
+                           cw_hex, er->vote_pool[best].votes, er->vote_pool[best].local_votes);
+                }
+                return 1;
+            }
         }
         return 0;
-    }
-
-    // Szukamy najlepszego (z effective score)
-    for (i = 0; i < max_cand; i++) {
-        if (er->vote_pool[i].votes == 0) continue;
-
-        int effective_score = er->vote_pool[i].votes + 
-                             (int)(er->vote_pool[i].local_votes * local_weight);
-
-        if (effective_score > best_score) {
-            best_score = effective_score;
-            best = i;
-        }
     }
 
     if (best < 0)
